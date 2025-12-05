@@ -183,7 +183,7 @@ class Hermes2ProToolParser(ToolParser):
         # 1. All tokens are parsed based on _text, not token_ids.
         # 2. All incoming text data is processed by the tool_call_delta_buffer
         #    function for buffering before being used for parsing.
-
+        previous_tool_call_portion = None
         delta_text = self.tool_call_delta_buffer(delta_text)
         # If the last characters of previous_text
         # match self.buffered_delta_text, remove only the matching part.
@@ -244,6 +244,15 @@ class Hermes2ProToolParser(ToolParser):
                 cur_tool_start_count > cur_tool_end_count
                 and cur_tool_start_count > prev_tool_start_count
             ):
+                # nested tool call, 2 open tool call token without close
+                if previous_tool_call_portion is None and prev_tool_start_count > prev_tool_end_count: 
+                    previous_tool_call_portion = previous_text.split(self.tool_call_start_token)[-1].rstrip()
+                    print("PREV TOOL CALL PORTION:", previous_tool_call_portion)
+                    print("CURRENT TEXT: ", current_text)
+                    print("PREVIOUS TEXT:", previous_text)
+                    if len(previous_tool_call_portion) == 0:
+                        previous_tool_call_portion = None
+
                 if len(delta_token_ids) > 1:
                     tool_call_portion = current_text.split(self.tool_call_start_token)[
                         -1
@@ -276,7 +285,8 @@ class Hermes2ProToolParser(ToolParser):
             ):
                 if self.prev_tool_call_arr is None or len(self.prev_tool_call_arr) == 0:
                     logger.debug("attempting to close tool call, but no tool call")
-                    return None
+                    return DeltaMessage(content=self.tool_call_start_token+tool_call_portion+self.tool_call_end_token)
+                    # return None
                 diff = self.prev_tool_call_arr[self.current_tool_id].get("arguments")
                 if diff:
                     diff = (
@@ -313,24 +323,46 @@ class Hermes2ProToolParser(ToolParser):
                 return delta
 
             try:
+                print("1###################################################################")
+                print(delta_text, "######")
+                print("TOOL CALL PORTION:", tool_call_portion)
                 current_tool_call = (
                     partial_json_parser.loads(tool_call_portion or "{}", flags)
                     if tool_call_portion
                     else None
                 )
                 logger.debug("Parsed tool call %s", current_tool_call)
+            # --- ADD THIS BLOCK ---
+            # except partial_json_parser.core.exceptions.PartialJSON:
+            #     logger.error("JSON input severely malformed (PartialJSON error). Treating as text to avoid stream crash.")
+                
+            #     # Fall through to the outer exception handler or return the text delta if needed
+            #     return None #DeltaMessage(content=delta_text)
+            
+            # --- END ADD BLOCK ---
             except partial_json_parser.core.exceptions.MalformedJSON:
                 logger.debug("not enough tokens to parse into JSON yet")
                 return None
             except json.decoder.JSONDecodeError:
                 logger.debug("unable to parse JSON")
                 return None
+            # except Exception as e:
+            #     print("2###################################################################")
+            #     print(e)
+            #     print(delta_text)
+            #     print(tool_call_portion)
+            #     return None
 
             # case - we haven't sent the tool name yet. If it's available, send
             #   it. otherwise, wait until it's available.
             if not self.current_tool_name_sent:
                 if current_tool_call is None:
+                    if previous_tool_call_portion is not None:
+                        delta = DeltaMessage(content=self.tool_call_start_token+previous_tool_call_portion)
+                        previous_tool_call_portion = None
+                        return delta
                     return None
+                print("current tool call",current_tool_call )
                 function_name: str | None = current_tool_call.get("name")
                 if function_name:
                     self.current_tool_name_sent = True
@@ -347,6 +379,10 @@ class Hermes2ProToolParser(ToolParser):
                         ]
                     )
                 else:
+                    if previous_tool_call_portion is not None:
+                        delta = DeltaMessage(content=self.tool_call_start_token+previous_tool_call_portion)
+                        previous_tool_call_portion = None
+                        return delta
                     return None
             # case -- otherwise, send the tool call delta
 
@@ -354,6 +390,10 @@ class Hermes2ProToolParser(ToolParser):
             if tool_call_portion is None:
                 # if there's text but not tool calls, send that -
                 # otherwise None to skip chunk
+                if previous_tool_call_portion is not None:
+                    delta = DeltaMessage(content=self.tool_call_start_token+previous_tool_call_portion)
+                    previous_tool_call_portion = None
+                    return delta
                 delta = (
                     DeltaMessage(content=delta_text)
                     if text_portion is not None
