@@ -27,7 +27,7 @@ from vllm.tokenizers import MistralTokenizer, TokenizerLike
 logger = init_logger(__name__)
 
 
-class Hermes2ProToolParser(ToolParser):
+class JanToolParser(ToolParser):
     def __init__(self, tokenizer: TokenizerLike):
         super().__init__(tokenizer)
 
@@ -75,6 +75,8 @@ class Hermes2ProToolParser(ToolParser):
         ]
 
         self.buffered_delta_text = ""
+        self._buf = ""
+        self.parsing_tool = False
 
     # Very simple idea: when encountering tokens like <, tool, _call, >,
     # <, /, tool, _call, >, store them in a buffer.
@@ -185,6 +187,7 @@ class Hermes2ProToolParser(ToolParser):
         #    function for buffering before being used for parsing.
 
         delta_text = self.tool_call_delta_buffer(delta_text)
+        previous_tool_call_portion = None
         # If the last characters of previous_text
         # match self.buffered_delta_text, remove only the matching part.
         if (
@@ -229,6 +232,7 @@ class Hermes2ProToolParser(ToolParser):
                     .split(self.tool_call_end_token)[0]
                     .rstrip()
                 )
+                self._buf = delta_text
                 delta_text = delta_text.split(self.tool_call_end_token)[0].rstrip()
                 text_portion = delta_text.split(self.tool_call_end_token)[-1].lstrip()
 
@@ -243,7 +247,10 @@ class Hermes2ProToolParser(ToolParser):
             if (
                 cur_tool_start_count > cur_tool_end_count
                 and cur_tool_start_count > prev_tool_start_count
+                and self.parsing_tool == False
             ):
+                self.parsing_tool = True
+                self._buf = delta_text
                 if len(delta_token_ids) > 1:
                     tool_call_portion = current_text.split(self.tool_call_start_token)[
                         -1
@@ -274,8 +281,13 @@ class Hermes2ProToolParser(ToolParser):
                 cur_tool_start_count == cur_tool_end_count
                 and cur_tool_end_count >= prev_tool_end_count
             ):
+                self.parsing_tool = False
                 if self.prev_tool_call_arr is None or len(self.prev_tool_call_arr) == 0:
                     logger.debug("attempting to close tool call, but no tool call")
+                    _buf = self._buf
+                    self._buf = ""
+                    if len(_buf):
+                        return DeltaMessage(content=_buf)
                     return None
                 diff = self.prev_tool_call_arr[self.current_tool_id].get("arguments")
                 if diff:
@@ -319,12 +331,40 @@ class Hermes2ProToolParser(ToolParser):
                     else None
                 )
                 logger.debug("Parsed tool call %s", current_tool_call)
+
+            # except partial_json_parser.core.exceptions.PartialJSON:
+                # logger.debug("not enough tokens to parse into JSON yet")
+                # _buf = self._buf
+                # self._buf = ""
+                # if self.parsing_tool:
+                    # self.parsing_tool = False
+                # return DeltaMessage(content = delta_text) if self.tool_call_start_token in delta_text else DeltaMessage(content = _buf+delta_text)
+                
+            
             except partial_json_parser.core.exceptions.MalformedJSON:
                 logger.debug("not enough tokens to parse into JSON yet")
-                return None
+                if len(delta_text.strip()) == 0:
+                    return None
+                _buf = self._buf
+                self._buf = ""
+                if self.parsing_tool:
+                    self.parsing_tool = False
+                
+                return DeltaMessage(content = delta_text) if (self.tool_call_start_token in delta_text or len(delta_text.strip()) == 0) else DeltaMessage(content = _buf+delta_text)
+            
             except json.decoder.JSONDecodeError:
                 logger.debug("unable to parse JSON")
-                return None
+                _buf = self._buf
+                self._buf = ""
+                self.parsing_tool = False
+                return DeltaMessage(content = delta_text) if self.tool_call_start_token in delta_text else DeltaMessage(content = _buf+delta_text)
+            
+            except Exception as e:
+                logger.debug(e)
+                _buf = self._buf
+                self._buf = ""
+                self.parsing_tool = False
+                return DeltaMessage(content = delta_text) if self.tool_call_start_token in delta_text else DeltaMessage(content = _buf+delta_text)
 
             # case - we haven't sent the tool name yet. If it's available, send
             #   it. otherwise, wait until it's available.
