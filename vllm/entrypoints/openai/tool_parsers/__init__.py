@@ -34,6 +34,10 @@ _TOOL_PARSERS_TO_REGISTER = {
         "deepseekv32_tool_parser",
         "DeepSeekV32ToolParser",
     ),
+    "jan": (
+        "jan_tool_parser", 
+        "JanToolParser"
+    ),
     "ernie45": (
         "ernie45_tool_parser",
         "Ernie45ToolParser",
