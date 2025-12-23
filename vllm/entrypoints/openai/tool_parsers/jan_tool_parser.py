@@ -83,7 +83,15 @@ class JanToolParser(ToolParser):
     # When the last token is encountered, empty the buffer and return it.
     # If a token appears in an incorrect sequence while storing in the buffer,
     # return the preceding buffer along with the token.
+    # IMPORTANT: Disable buffering when parsing a tool call to preserve content
+    # that looks like tags (e.g., "<tool_call>" in JSON arguments).
     def tool_call_delta_buffer(self, delta_text: str):
+        # If we're already parsing a tool call, don't buffer anything
+        # This preserves content like "<tool_call>" or "</tool_call>" in arguments
+        # We detect the actual end tag using tag counting in the main logic
+        if self.parsing_tool:
+            return delta_text
+
         # If the sequence of tool_call_start or tool_call_end tokens is not yet
         # complete, fill the buffer with the token and return "".
         if (
@@ -251,15 +259,6 @@ class JanToolParser(ToolParser):
             ):
                 self.parsing_tool = True
                 self._buf = delta_text
-                if len(delta_token_ids) > 1:
-                    tool_call_portion = current_text.split(self.tool_call_start_token)[
-                        -1
-                    ]
-                else:
-                    tool_call_portion = None
-                    delta = None
-
-                text_portion = None
 
                 # set cursors and state appropriately
                 self.current_tool_id += 1
@@ -267,13 +266,49 @@ class JanToolParser(ToolParser):
                 self.streamed_args_for_tool.append("")
                 logger.debug("Starting on a new tool %s", self.current_tool_id)
 
+                if len(delta_token_ids) > 1:
+                    # Extract the current tool call portion by finding tag positions
+                    # Find the position of the current_tool_id-th start tag
+                    pos = 0
+                    for _ in range(self.current_tool_id + 1):
+                        pos = current_text.find(self.tool_call_start_token, pos)
+                        if pos == -1:
+                            break
+                        pos += len(self.tool_call_start_token)
+
+                    if pos > 0:
+                        # Extract from this position to the next end tag or end of string
+                        end_pos = current_text.find(self.tool_call_end_token, pos)
+                        tool_call_portion = current_text[pos:end_pos] if end_pos != -1 else current_text[pos:]
+                    else:
+                        tool_call_portion = current_text.split(self.tool_call_start_token)[-1]
+                else:
+                    tool_call_portion = None
+                    delta = None
+
+                text_portion = None
+
             # case -- we're updating an existing tool call
             elif (
                 cur_tool_start_count > cur_tool_end_count
-                and cur_tool_start_count == prev_tool_start_count
+                and (cur_tool_start_count == prev_tool_start_count or self.parsing_tool)
             ):
-                # get the portion of the text that's the tool call
-                tool_call_portion = current_text.split(self.tool_call_start_token)[-1]
+                # get the portion of the text that's the current tool call
+                # Find the position of the current_tool_id-th start tag
+                pos = 0
+                for _ in range(self.current_tool_id + 1):
+                    pos = current_text.find(self.tool_call_start_token, pos)
+                    if pos == -1:
+                        break
+                    pos += len(self.tool_call_start_token)
+
+                if pos > 0:
+                    # Extract from this position to the next end tag or end of string
+                    end_pos = current_text.find(self.tool_call_end_token, pos)
+                    tool_call_portion = current_text[pos:end_pos] if end_pos != -1 else current_text[pos:]
+                else:
+                    # Fallback to splitting approach
+                    tool_call_portion = current_text.split(self.tool_call_start_token)[-1]
                 text_portion = None
 
             # case -- the current tool call is being closed.
