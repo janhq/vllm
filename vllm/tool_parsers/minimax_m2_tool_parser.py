@@ -492,6 +492,23 @@ class MinimaxM2ToolParser(ToolParser):
                 # Normal content, no tool call
                 return DeltaMessage(content=delta_text)
 
+        # Check if tool call block has ended and we need to allow content
+        # This handles the case between [/TOOL_CALL] and the next [TOOL_CALL]
+        # Check if the last tool call end is after the last invoke start (meaning we're between calls)
+        last_invoke_pos = current_text.rfind(self.invoke_start_prefix)
+        last_invoke_end_pos = current_text.rfind(self.invoke_end_token)
+        has_ended = last_invoke_end_pos > last_invoke_pos if last_invoke_pos != -1 else False
+        if has_ended and self.invoke_start_prefix not in delta_text:
+            # We've ended a tool call block and no new one started yet
+            self.is_tool_call_started = False
+            self.current_tool_index = 0
+            self.header_sent = False
+            self.in_function = False
+            self.json_started = False
+            self.json_closed = False
+            # Now process as content
+            return DeltaMessage(content=delta_text)
+
         # Check if we're between tool calls (waiting for next one)
         invoke_starts_count = current_text.count(self.invoke_start_prefix)
         if self.current_tool_index >= invoke_starts_count:
