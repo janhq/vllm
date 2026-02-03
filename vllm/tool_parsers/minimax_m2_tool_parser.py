@@ -417,7 +417,9 @@ class MinimaxM2ToolParser(ToolParser):
         request: ChatCompletionRequest,
     ) -> DeltaMessage | None:
         """Extract tool calls from streaming model output."""
-
+        # with open("test_delta.txt", "a") as f:
+        #             f.write(f"delta_text : {delta_text}\n")
+        # print("delta_stex: ",delta_text)
         # Store request for type conversion
         if not previous_text or self.tool_call_start_token in delta_text:
             self._reset_streaming_state()
@@ -473,6 +475,7 @@ class MinimaxM2ToolParser(ToolParser):
                 or self.tool_call_start_token in delta_text
             ):
                 self.is_tool_call_started = True
+                print("enter 2")
                 # Return any content before the tool call
                 if self.tool_call_start_token in delta_text:
                     content_before = delta_text[
@@ -482,13 +485,18 @@ class MinimaxM2ToolParser(ToolParser):
                         return DeltaMessage(content=content_before)
                 return None
             else:
+                # print("delta_text inside:", delta_text )
+                # with open("test.txt", "a") as f:
+                #     f.write(f"delta_text inside: {delta_text}\n")
                 # Check if we're between tool calls - skip whitespace
                 if (
                     current_text.rstrip().endswith(self.tool_call_end_token)
                     and delta_text.strip() == ""
                 ):
                     # We just ended a tool call, skip whitespace
+                    print("enter 4")
                     return None
+                
                 # Normal content, no tool call
                 return DeltaMessage(content=delta_text)
 
@@ -499,6 +507,19 @@ class MinimaxM2ToolParser(ToolParser):
         last_invoke_end_pos = current_text.rfind(self.invoke_end_token)
         has_ended = last_invoke_end_pos > last_invoke_pos if last_invoke_pos != -1 else False
         if has_ended and self.invoke_start_prefix not in delta_text:
+            # Before ending, send closing } if JSON was started but not closed
+            if self.json_started and not self.json_closed:
+                self.json_started = False
+                self.json_closed = True
+                self.in_function = False
+                return DeltaMessage(
+                    tool_calls=[
+                        DeltaToolCall(
+                            index=self.current_tool_index,
+                            function=DeltaFunctionCall(arguments="}"),
+                        )
+                    ]
+                )
             # We've ended a tool call block and no new one started yet
             self.is_tool_call_started = False
             self.current_tool_index = 0
@@ -605,6 +626,17 @@ class MinimaxM2ToolParser(ToolParser):
             # Make sure json_started is set if we're processing parameters
             if not self.json_started:
                 self.json_started = True
+                # Update streamed_args_for_tool for opening brace
+                if self.current_tool_index < len(self.streamed_args_for_tool):
+                    self.streamed_args_for_tool[self.current_tool_index] += "{"
+                return DeltaMessage(
+                    tool_calls=[
+                        DeltaToolCall(
+                            index=self.current_tool_index,
+                            function=DeltaFunctionCall(arguments="{"),
+                        )
+                    ]
+                )
 
             # Check for function end in accumulated text
             if not self.json_closed and self.invoke_end_token in tool_text:
@@ -669,6 +701,20 @@ class MinimaxM2ToolParser(ToolParser):
                     return None
 
             # Look for parameters
+            # First, ensure opening brace is sent if not already
+            if not self.json_started:
+                self.json_started = True
+                if self.current_tool_index < len(self.streamed_args_for_tool):
+                    self.streamed_args_for_tool[self.current_tool_index] += "{"
+                return DeltaMessage(
+                    tool_calls=[
+                        DeltaToolCall(
+                            index=self.current_tool_index,
+                            function=DeltaFunctionCall(arguments="{"),
+                        )
+                    ]
+                )
+
             # Find all parameter starts
             param_starts = []
             idx = 0
