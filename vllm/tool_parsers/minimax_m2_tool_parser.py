@@ -417,9 +417,6 @@ class MinimaxM2ToolParser(ToolParser):
         request: ChatCompletionRequest,
     ) -> DeltaMessage | None:
         """Extract tool calls from streaming model output."""
-        # with open("test_delta.txt", "a") as f:
-        #             f.write(f"delta_text : {delta_text}\n")
-        # print("delta_stex: ",delta_text)
         # Store request for type conversion
         if not previous_text or self.tool_call_start_token in delta_text:
             self._reset_streaming_state()
@@ -475,7 +472,6 @@ class MinimaxM2ToolParser(ToolParser):
                 or self.tool_call_start_token in delta_text
             ):
                 self.is_tool_call_started = True
-                print("enter 2")
                 # Return any content before the tool call
                 if self.tool_call_start_token in delta_text:
                     content_before = delta_text[
@@ -485,16 +481,12 @@ class MinimaxM2ToolParser(ToolParser):
                         return DeltaMessage(content=content_before)
                 return None
             else:
-                # print("delta_text inside:", delta_text )
-                # with open("test.txt", "a") as f:
-                #     f.write(f"delta_text inside: {delta_text}\n")
                 # Check if we're between tool calls - skip whitespace
                 if (
                     current_text.rstrip().endswith(self.tool_call_end_token)
                     and delta_text.strip() == ""
                 ):
                     # We just ended a tool call, skip whitespace
-                    print("enter 4")
                     return None
                 
                 # Normal content, no tool call
