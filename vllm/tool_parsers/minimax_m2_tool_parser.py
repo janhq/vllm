@@ -417,7 +417,6 @@ class MinimaxM2ToolParser(ToolParser):
         request: ChatCompletionRequest,
     ) -> DeltaMessage | None:
         """Extract tool calls from streaming model output."""
-
         # Store request for type conversion
         if not previous_text or self.tool_call_start_token in delta_text:
             self._reset_streaming_state()
@@ -489,8 +488,39 @@ class MinimaxM2ToolParser(ToolParser):
                 ):
                     # We just ended a tool call, skip whitespace
                     return None
+                
                 # Normal content, no tool call
                 return DeltaMessage(content=delta_text)
+
+        # Check if tool call block has ended and we need to allow content
+        # This handles the case between [/TOOL_CALL] and the next [TOOL_CALL]
+        # Check if the last tool call end is after the last invoke start (meaning we're between calls)
+        last_invoke_pos = current_text.rfind(self.invoke_start_prefix)
+        last_invoke_end_pos = current_text.rfind(self.invoke_end_token)
+        has_ended = last_invoke_end_pos > last_invoke_pos if last_invoke_pos != -1 else False
+        if has_ended and self.invoke_start_prefix not in delta_text:
+            # Before ending, send closing } if JSON was started but not closed
+            if self.json_started and not self.json_closed:
+                self.json_started = False
+                self.json_closed = True
+                self.in_function = False
+                return DeltaMessage(
+                    tool_calls=[
+                        DeltaToolCall(
+                            index=self.current_tool_index,
+                            function=DeltaFunctionCall(arguments="}"),
+                        )
+                    ]
+                )
+            # We've ended a tool call block and no new one started yet
+            self.is_tool_call_started = False
+            self.current_tool_index = 0
+            self.header_sent = False
+            self.in_function = False
+            self.json_started = False
+            self.json_closed = False
+            # Now process as content
+            return DeltaMessage(content=delta_text)
 
         # Check if we're between tool calls (waiting for next one)
         invoke_starts_count = current_text.count(self.invoke_start_prefix)
@@ -588,6 +618,17 @@ class MinimaxM2ToolParser(ToolParser):
             # Make sure json_started is set if we're processing parameters
             if not self.json_started:
                 self.json_started = True
+                # Update streamed_args_for_tool for opening brace
+                if self.current_tool_index < len(self.streamed_args_for_tool):
+                    self.streamed_args_for_tool[self.current_tool_index] += "{"
+                return DeltaMessage(
+                    tool_calls=[
+                        DeltaToolCall(
+                            index=self.current_tool_index,
+                            function=DeltaFunctionCall(arguments="{"),
+                        )
+                    ]
+                )
 
             # Check for function end in accumulated text
             if not self.json_closed and self.invoke_end_token in tool_text:
@@ -652,6 +693,20 @@ class MinimaxM2ToolParser(ToolParser):
                     return None
 
             # Look for parameters
+            # First, ensure opening brace is sent if not already
+            if not self.json_started:
+                self.json_started = True
+                if self.current_tool_index < len(self.streamed_args_for_tool):
+                    self.streamed_args_for_tool[self.current_tool_index] += "{"
+                return DeltaMessage(
+                    tool_calls=[
+                        DeltaToolCall(
+                            index=self.current_tool_index,
+                            function=DeltaFunctionCall(arguments="{"),
+                        )
+                    ]
+                )
+
             # Find all parameter starts
             param_starts = []
             idx = 0
