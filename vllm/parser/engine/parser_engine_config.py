@@ -32,6 +32,9 @@ class ParserState(Enum):
     TOOL_NAME = auto()
     TOOL_ARGS = auto()
     TOOL_BETWEEN = auto()
+    # Inside a block belonging to a different model format; terminals
+    # matched here pass through as plain content.
+    FOREIGN_BLOCK = auto()
 
 
 @dataclass(frozen=True, slots=True)
