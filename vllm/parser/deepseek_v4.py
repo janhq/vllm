@@ -185,6 +185,13 @@ def deepseek_v4_config(thinking: bool = False) -> ParserEngineConfig:
                 (EventType.TOOL_CALL_START,),
                 validate_tool_name=True,
             ),
+            # The model can also omit </think> before the orphan invoke.
+            # End reasoning and recover the declared tool in that case.
+            (ParserState.REASONING, "INVOKE_PREFIX"): Transition(
+                ParserState.TOOL_NAME,
+                (EventType.REASONING_END, EventType.TOOL_CALL_START),
+                validate_tool_name=True,
+            ),
             # V3.2-style function_calls wrapper is foreign to V4: pass
             # it and its contents through as plain content
             (ParserState.CONTENT, "FOREIGN_START"): Transition(

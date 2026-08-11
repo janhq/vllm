@@ -275,6 +275,20 @@ class TestMissingToolStart:
         assert args == {"location": "NYC"}
         assert result.content is None
 
+    def test_orphan_invoke_ends_reasoning_without_think_end(
+        self, mock_tokenizer, mock_request, weather_tool
+    ):
+        parser = self._declared_parser(mock_tokenizer, mock_request, weather_tool)
+        result = parser.extract_tool_calls(
+            "I will check.\n" + self._orphan_invoke(), mock_request
+        )
+
+        assert result.tools_called is True
+        assert result.tool_calls[0].function.name == "get_weather"
+        assert json.loads(result.tool_calls[0].function.arguments) == {
+            "location": "NYC"
+        }
+
     def test_non_streaming_orphan_invoke_no_tool_end(
         self, mock_tokenizer, mock_request, weather_tool
     ):
