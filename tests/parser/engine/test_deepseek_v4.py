@@ -1699,6 +1699,59 @@ class TestDelegatingParserLargeDelta:
         args = json.loads(output.tool_calls[0]["arguments"])
         assert args == {"location": "Berlin", "units": "celsius"}
 
+    def test_malformed_tool_start_does_not_leak_as_content(self):
+        """A missing `>` must not expose the DSML wrapper to clients."""
+        tokens = [
+            (100, "I will call get_weather."),
+            (_DSV4_FULL_VOCAB[DSML_THINK_END], DSML_THINK_END),
+            (101, DSML_TOOL_START[:-1] + "\n"),
+            (102, _invoke("get_weather", ("location", "true", "Hanoi"))),
+            (_DSV4_FULL_VOCAB[DSML_TOOL_END], DSML_TOOL_END),
+        ]
+        parser = _DeepSeekV4Delegating(
+            MockTokenizer(vocab=dict(_DSV4_FULL_VOCAB), tokens=tokens),
+            chat_template_kwargs={"thinking": True},
+        )
+
+        output = collect_output(
+            replay_streaming(
+                parser,
+                tokens,
+                chunk_size=1,
+                finished_on_last=True,
+                tools=DUMMY_TOOLS,
+            )
+        )
+
+        assert DSML_TOOL_START[:-1] not in output.content
+        assert len(output.tool_calls) == 1
+
+    def test_truncated_tool_start_does_not_leak_as_content(self):
+        """A stream ending at `<｜DSML｜tool_c` must not expose DSML."""
+        truncated_start = DSML_TOOL_START.removesuffix("alls>")
+        tokens = [
+            (100, "I will call get_weather."),
+            (_DSV4_FULL_VOCAB[DSML_THINK_END], DSML_THINK_END),
+            (101, truncated_start),
+        ]
+        parser = _DeepSeekV4Delegating(
+            MockTokenizer(vocab=dict(_DSV4_FULL_VOCAB), tokens=tokens),
+            chat_template_kwargs={"thinking": True},
+        )
+
+        output = collect_output(
+            replay_streaming(
+                parser,
+                tokens,
+                chunk_size=1,
+                finished_on_last=True,
+                tools=DUMMY_TOOLS,
+            )
+        )
+
+        assert truncated_start not in output.content
+        assert output.tool_calls == []
+
     def test_eos_drop_token_does_not_swallow_tool_calls(self):
         """Tool calls must survive when an EOS DROP token's ID is in
         delta_token_ids but its text is absent from delta_text.

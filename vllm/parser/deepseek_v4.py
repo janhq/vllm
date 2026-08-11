@@ -43,6 +43,7 @@ _DSML = "｜DSML｜"
 DSML_THINK_START = "<think>"
 DSML_THINK_END = "</think>"
 DSML_TOOL_START = f"<{_DSML}tool_calls>"
+DSML_TOOL_START_PREFIX = f"<{_DSML}tool_"
 DSML_TOOL_END = f"</{_DSML}tool_calls>"
 DSML_INVOKE_PREFIX = f'<{_DSML}invoke name="'
 DSML_INVOKE_NAME_END = '">'
@@ -133,6 +134,7 @@ def deepseek_v4_config(thinking: bool = False) -> ParserEngineConfig:
             "THINK_START": DSML_THINK_START,
             "THINK_END": DSML_THINK_END,
             "TOOL_START": DSML_TOOL_START,
+            "TOOL_START_PREFIX": DSML_TOOL_START_PREFIX,
             "TOOL_END": DSML_TOOL_END,
             "INVOKE_PREFIX": DSML_INVOKE_PREFIX,
             "INVOKE_NAME_END": DSML_INVOKE_NAME_END,
@@ -175,6 +177,16 @@ def deepseek_v4_config(thinking: bool = False) -> ParserEngineConfig:
                 ParserState.TOOL_PREAMBLE,
                 (),
             ),
+            # The model may omit the closing `>` or be truncated after
+            # `tool_`; recognize that control prefix rather than leaking it.
+            (ParserState.REASONING, "TOOL_START_PREFIX"): Transition(
+                ParserState.TOOL_PREAMBLE,
+                (EventType.REASONING_END,),
+            ),
+            (ParserState.CONTENT, "TOOL_START_PREFIX"): Transition(
+                ParserState.TOOL_PREAMBLE,
+                (),
+            ),
             # Orphan invoke: at long context the model may omit the
             # <｜DSML｜tool_calls> wrapper and emit the invoke directly.
             # The invoke marker has no dedicated special token, so hold
@@ -206,6 +218,10 @@ def deepseek_v4_config(thinking: bool = False) -> ParserEngineConfig:
             # block, so a stray foreign start cannot disable tool
             # parsing for the rest of the response.
             (ParserState.FOREIGN_BLOCK, "TOOL_START"): Transition(
+                ParserState.TOOL_PREAMBLE,
+                (),
+            ),
+            (ParserState.FOREIGN_BLOCK, "TOOL_START_PREFIX"): Transition(
                 ParserState.TOOL_PREAMBLE,
                 (),
             ),
